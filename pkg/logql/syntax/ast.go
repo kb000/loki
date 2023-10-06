@@ -1631,6 +1631,7 @@ func reduceBinOp(op string, left, right float64) *LiteralExpr {
 		&promql.Sample{F: right},
 		false,
 		false,
+		false,
 	)
 	if err != nil {
 		return &LiteralExpr{err: err}
@@ -1638,7 +1639,8 @@ func reduceBinOp(op string, left, right float64) *LiteralExpr {
 	return &LiteralExpr{Val: merged.F}
 }
 
-func MergeBinOp(op string, left, right *promql.Sample, filter, isVectorComparison bool) (*promql.Sample, error) {
+// if swapped==true, meaning literal expression is on the right.
+func MergeBinOp(op string, left, right *promql.Sample, swapped, filter, isVectorComparison bool) (*promql.Sample, error) {
 	var merger func(left, right *promql.Sample) *promql.Sample
 
 	switch op {
@@ -1826,9 +1828,17 @@ func MergeBinOp(op string, left, right *promql.Sample, filter, isVectorCompariso
 	}
 
 	if filter {
+		// Catch cases where the scalar is the LHS in a scalar-vector comparison operation.
+		// We want to always keep the vector element value as the output value, even if it's on the RHS.
+		// if swapped != true, vector is on the right.
+		// https://github.com/grafana/loki/issues/10741
+		if !swapped {
+			left, right = right, left
+		}
+
 		// if a filter-enabled vector-wise comparison has returned non-nil,
-		// ensure we return the left hand side's value (2) instead of the
-		// comparison operator's result (1: the truthy answer)
+		// ensure we return the value of the sample instead of the
+		// comparison operator's result (the truthy answer)
 		if res != nil {
 			return left, nil
 		}
