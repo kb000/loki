@@ -1,0 +1,8 @@
+# This file should contain a list fo deprecated config options.
+#
+# The value for a deprecated option should be a message that explains why the option is deprecated and what to use instead. E.g.
+# ingester:
+#   max_transfer_retries: "Use the WAL instead"
+
+ingester:
+  max_transfer_retries: "Use the WAL instead"

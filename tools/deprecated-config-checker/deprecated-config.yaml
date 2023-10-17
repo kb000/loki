@@ -1,0 +1,23 @@
+# This file should contain a list fo deprecated config options.
+#
+# The value for a deprecated option should be a message that explains why the option is deprecated and what to use instead. E.g.
+# storage_config:
+#  cassandra: "Cassandra is deprecated. Use any other non-deprecated storage instead.
+#
+# A given set of deprecated values can also be given though the _deprecated field along with a message in the _msg field. E.g.
+# schema_config:
+#   configs:
+#     store:
+#       _deprecated: ["aws", "aws-dynamo", "gcp", "gcp-columnkey", "bigtable", "bigtable-hashed", "cassandra", "grpc"]
+#       _msg: "Use tsdb (preferred) or boltdb-shipper instead."
+#
+# Note that even though the configs in schema_config takes a list, here we specify the deprecated fields for each item in the list.
+
+storage_config:
+  cassandra: "Cassandra is deprecated. Use any other non-deprecated storage instead."
+
+schema_config:
+  configs:
+    store:
+      _deprecated: ["aws", "aws-dynamo", "gcp", "gcp-columnkey", "bigtable", "bigtable-hashed", "cassandra", "grpc"]
+      _msg: "Use tsdb (preferred) or boltdb-shipper instead."
