@@ -28,17 +28,17 @@ func main() {
 
 	deprecates := c.CheckDeprecated()
 	if len(deprecates) > 0 {
-		fmt.Println("Deprecated configs:")
+		fmt.Printf("-- Deprecated configs --\n\n")
 		for _, d := range deprecates {
-			fmt.Println(d)
+			fmt.Printf("[*] %s\n\n", d)
 		}
 	}
 
 	deletes := c.CheckDeleted()
 	if len(deletes) > 0 {
-		fmt.Println("Deleted configs:")
+		fmt.Printf("-- Deleted configs --\n\n")
 		for _, d := range deletes {
-			fmt.Println(d)
+			fmt.Printf("[-] %s\n\n", d)
 		}
 	}
 
