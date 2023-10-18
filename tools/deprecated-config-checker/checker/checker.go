@@ -12,23 +12,30 @@ import (
 const (
 	deprecatedValuesField = "_deprecated"
 	messageField          = "_msg"
+
+	defaultDeprecatesFilePath = "tools/deprecated-config-checker/deprecated-config.yaml"
+	defaultDeletesFilePath    = "tools/deprecated-config-checker/deleted-config.yaml"
+
+	configRequiredErrorMsg = "config.file or runtime-config.file are required"
 )
 
 type CheckerConfig struct {
-	DeprecatesFile string
-	DeletesFile    string
-	ConfigFile     string
+	DeprecatesFile    string
+	DeletesFile       string
+	ConfigFile        string
+	RuntimeConfigFile string
 }
 
 func (c *CheckerConfig) RegisterFlags(f *flag.FlagSet) {
-	f.StringVar(&c.DeprecatesFile, "deprecates-file", "tools/deprecated-config-checker/deprecated-config.yaml", "YAML file with deprecated configs")
-	f.StringVar(&c.DeletesFile, "deletes-file", "tools/deprecated-config-checker/deleted-config.yaml", "YAML file with deleted configs")
+	f.StringVar(&c.DeprecatesFile, "deprecates-file", defaultDeprecatesFilePath, "YAML file with deprecated configs")
+	f.StringVar(&c.DeletesFile, "deletes-file", defaultDeletesFilePath, "YAML file with deleted configs")
 	f.StringVar(&c.ConfigFile, "config.file", "", "User-defined config file to validate")
+	f.StringVar(&c.RuntimeConfigFile, "runtime-config.file", "", "User-defined runtime config file to validate")
 }
 
 func (c *CheckerConfig) Validate() error {
-	if c.ConfigFile == "" {
-		return fmt.Errorf("config.file is required")
+	if c.ConfigFile == "" && c.RuntimeConfigFile == "" {
+		return fmt.Errorf(configRequiredErrorMsg)
 	}
 	return nil
 }
@@ -36,7 +43,9 @@ func (c *CheckerConfig) Validate() error {
 type RawYaml map[string]interface{}
 
 type Checker struct {
-	input      RawYaml
+	config        RawYaml
+	runtimeConfig RawYaml
+
 	deprecates RawYaml
 	deletes    RawYaml
 }
@@ -56,48 +65,66 @@ func loadYAMLFile(path string) (RawYaml, error) {
 }
 
 func NewChecker(cfg CheckerConfig) (*Checker, error) {
-	input, err := loadYAMLFile(cfg.ConfigFile)
-	if err != nil {
-		return nil, err
-	}
-
 	deprecates, err := loadYAMLFile(cfg.DeprecatesFile)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read deprecates YAML: %w", err)
 	}
 
 	deletes, err := loadYAMLFile(cfg.DeletesFile)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read deletes YAML: %w", err)
+	}
+
+	var config RawYaml
+	if cfg.ConfigFile != "" {
+		config, err = loadYAMLFile(cfg.ConfigFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read config YAML: %w", err)
+		}
+	}
+
+	var runtimeConfig RawYaml
+	if cfg.RuntimeConfigFile != "" {
+		runtimeConfig, err = loadYAMLFile(cfg.RuntimeConfigFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read runtime config YAML: %w", err)
+		}
 	}
 
 	return &Checker{
-		input:      input,
-		deprecates: deprecates,
-		deletes:    deletes,
+		config:        config,
+		runtimeConfig: runtimeConfig,
+		deprecates:    deprecates,
+		deletes:       deletes,
 	}, nil
 }
 
-func (c *Checker) CheckDeprecated() []DeprecationNotes {
-	fieldsInInput := enumerateCursedFields(c.deprecates, c.input, "", []DeprecationNotes{})
-	return fieldsInInput
+func (c *Checker) CheckConfigDeprecated() []DeprecationNotes {
+	return checkConfigDeprecated(c.deprecates, c.config)
 }
 
-func (c *Checker) CheckDeleted() []DeprecationNotes {
-	fieldsInInput := enumerateCursedFields(c.deletes, c.input, "", []DeprecationNotes{})
-	return fieldsInInput
+func (c *Checker) CheckConfigDeleted() []DeprecationNotes {
+	return checkConfigDeprecated(c.deletes, c.config)
+}
+
+func (c *Checker) CheckRuntimeConfigDeprecated() []DeprecationNotes {
+	return checkRuntimeConfigDeprecated(c.deprecates, c.runtimeConfig)
+}
+
+func (c *Checker) CheckRuntimeConfigDeleted() []DeprecationNotes {
+	return checkRuntimeConfigDeprecated(c.deletes, c.runtimeConfig)
 }
 
 type deprecationAnnotation struct {
-	deprecatedValues []string
-	msg              string
+	DeprecatedValues []string
+	Msg              string
 }
 
 func getDeprecationAnnotation(value interface{}) (deprecationAnnotation, bool) {
 	// If the value is a string, return it as the message
 	if msg, is := value.(string); is {
 		return deprecationAnnotation{
-			msg: msg,
+			Msg: msg,
 		}, true
 	}
 
@@ -118,8 +145,8 @@ func getDeprecationAnnotation(value interface{}) (deprecationAnnotation, bool) {
 		}
 
 		return deprecationAnnotation{
-			msg:              msg.(string),
-			deprecatedValues: deprecatedValues,
+			Msg:              msg.(string),
+			DeprecatedValues: deprecatedValues,
 		}, true
 	}
 
@@ -128,22 +155,22 @@ func getDeprecationAnnotation(value interface{}) (deprecationAnnotation, bool) {
 
 type DeprecationNotes struct {
 	deprecationAnnotation
-	itemPath  string
-	itemValue string
+	ItemPath  string
+	ItemValue string
 }
 
 func (d DeprecationNotes) String() string {
 	var sb strings.Builder
 
-	sb.WriteString(d.itemPath)
-	if d.itemValue != "" {
+	sb.WriteString(d.ItemPath)
+	if d.ItemValue != "" {
 		sb.WriteString(" = ")
-		sb.WriteString(d.itemValue)
+		sb.WriteString(d.ItemValue)
 	}
-	sb.WriteString(": " + d.msg)
-	if len(d.deprecatedValues) > 0 {
+	sb.WriteString(": " + d.Msg)
+	if len(d.DeprecatedValues) > 0 {
 		sb.WriteString("\n\t|- " + "Deprecated values: ")
-		sb.WriteString(strings.Join(d.deprecatedValues, ", "))
+		sb.WriteString(strings.Join(d.DeprecatedValues, ", "))
 	}
 
 	return sb.String()
@@ -156,11 +183,56 @@ func appenToPath(path, key string) string {
 	return path + "." + key
 }
 
-func enumerateCursedFields(deprecates, input RawYaml, rootPath string, deprecations []DeprecationNotes) []DeprecationNotes {
+func getLimitsConfig(in RawYaml) RawYaml {
+	limits, exists := in["limits_config"]
+	if !exists {
+		return nil
+	}
+	return limits.(RawYaml)
+}
+
+func getOverrides(runtimeConf RawYaml) RawYaml {
+	overrides, exists := runtimeConf["overrides"]
+	if !exists {
+		return nil
+	}
+	return overrides.(RawYaml)
+}
+
+func checkRuntimeConfigDeprecated(deprecates, runtimeConfig RawYaml) []DeprecationNotes {
+	deprecatedLimits := getLimitsConfig(deprecates)
+	if deprecatedLimits == nil {
+		return nil
+	}
+
+	overrides := getOverrides(runtimeConfig)
+	if overrides == nil {
+		return nil
+	}
+
+	// We check the deprecated fields for each tenant
+	var deprecations []DeprecationNotes
+	for tenant, tenantOverrides := range overrides {
+		tenantDeprecations := checkConfigDeprecated(deprecatedLimits, tenantOverrides.(RawYaml))
+		for i := range tenantDeprecations {
+			tenantPath := appenToPath("overrides", tenant)
+			tenantDeprecations[i].ItemPath = appenToPath(tenantPath, tenantDeprecations[i].ItemPath)
+		}
+		deprecations = append(deprecations, tenantDeprecations...)
+	}
+
+	return deprecations
+}
+
+func checkConfigDeprecated(deprecates, config RawYaml) []DeprecationNotes {
+	return enumerateDeprecatesFields(deprecates, config, "", []DeprecationNotes{})
+}
+
+func enumerateDeprecatesFields(deprecates, input RawYaml, rootPath string, deprecations []DeprecationNotes) []DeprecationNotes {
 	for key, deprecate := range deprecates {
 		inputValue, exists := input[key]
 		if !exists {
-			// If this item is not set in the input, we can skip it.
+			// If this item is not set in the config, we can skip it.
 			continue
 		}
 
@@ -171,11 +243,11 @@ func enumerateCursedFields(deprecates, input RawYaml, rootPath string, deprecati
 			var inputDeprecated bool
 
 			// If there are no specific values deprecated, the whole config is deprecated.
-			// Otherwise, look for the input value in the list of deprecated values.
-			if len(note.deprecatedValues) == 0 {
+			// Otherwise, look for the config value in the list of deprecated values.
+			if len(note.DeprecatedValues) == 0 {
 				inputDeprecated = true
 			} else {
-				for _, v := range note.deprecatedValues {
+				for _, v := range note.DeprecatedValues {
 					if v == inputValue {
 						inputDeprecated = true
 						break
@@ -191,8 +263,8 @@ func enumerateCursedFields(deprecates, input RawYaml, rootPath string, deprecati
 
 				deprecations = append(deprecations, DeprecationNotes{
 					deprecationAnnotation: note,
-					itemPath:              path,
-					itemValue:             itemValueStr,
+					ItemPath:              path,
+					ItemValue:             itemValueStr,
 				})
 				continue
 			}
@@ -202,12 +274,12 @@ func enumerateCursedFields(deprecates, input RawYaml, rootPath string, deprecati
 		if deprecateYaml, is := deprecate.(RawYaml); is {
 			switch v := inputValue.(type) {
 			case RawYaml:
-				deprecations = enumerateCursedFields(deprecateYaml, v, path, deprecations)
+				deprecations = enumerateDeprecatesFields(deprecateYaml, v, path, deprecations)
 			case []interface{}:
-				// If the input is a list, recurse into each item.
+				// If the config is a list, recurse into each item.
 				for i, item := range v {
 					itemYaml := item.(RawYaml)
-					deprecations = enumerateCursedFields(deprecateYaml, itemYaml, appenToPath(path, fmt.Sprintf("[%d]", i)), deprecations)
+					deprecations = enumerateDeprecatesFields(deprecateYaml, itemYaml, appenToPath(path, fmt.Sprintf("[%d]", i)), deprecations)
 				}
 			}
 		}
